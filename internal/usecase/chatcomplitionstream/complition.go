@@ -3,6 +3,8 @@ package chatcomplitionstream
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 
 	"github.com/Paulo-DevTallos/imersao-fullcycle-lx/internal/domain/entities"
 	"github.com/Paulo-DevTallos/imersao-fullcycle-lx/internal/domain/gateway"
@@ -41,12 +43,14 @@ type ChatComplitionOutputDTO struct {
 type ChatComplitionUseCase struct {
 	ChatGateway  gateway.ChatGateway
 	OpenAiClient *openai.Client
+	Stream       chan ChatComplitionOutputDTO // conforme recebe pega os dados no canal e joga para uma outra thread
 }
 
-func NewChatComplitionUseCase(chatGateway gateway.ChatGateway, openaiClient *openai.Client) *ChatComplitionUseCase {
+func NewChatComplitionUseCase(chatGateway gateway.ChatGateway, openaiClient *openai.Client, stream chan ChatComplitionOutputDTO) *ChatComplitionUseCase {
 	return &ChatComplitionUseCase{
 		ChatGateway:  chatGateway,
 		OpenAiClient: openaiClient,
+		Stream:       stream,
 	}
 }
 
@@ -69,7 +73,81 @@ func (us *ChatComplitionUseCase) Execute(ctx context.Context, input ChatCompliti
 			return nil, errors.New("error fatching existing chat" + err.Error())
 		}
 	}
-	return nil, err
+	userMessage, err := entities.NewMessage("user", input.UserMessage, chat.Config.Model)
+	if err != nil {
+		return nil, errors.New("error creating new chat" + err.Error())
+	}
+	err = chat.AddMessage(userMessage)
+	if err != nil {
+		return nil, errors.New("error adding new message" + err.Error())
+	}
+	// _ representa "&"
+	messages := []openai.ChatCompletionMessage{}
+	for _, msg := range chat.Messages {
+		messages = append(messages, openai.ChatCompletionMessage{
+			Role:    msg.Role,
+			Content: msg.Content,
+		})
+	}
+
+	resp, err := us.OpenAiClient.CreateChatCompletionStream(
+		ctx,
+		openai.ChatCompletionRequest{
+			Model:            chat.Config.Model.Name,
+			Messages:         messages,
+			MaxTokens:        chat.Config.MaxTokens,
+			Temperature:      chat.Config.Temperature,
+			TopP:             chat.Config.TopP,
+			PresencePenalty:  chat.Config.PresencePenalty,
+			FrequencyPenalty: chat.Config.FrequencyPenalty,
+			Stop:             chat.Config.Stop,
+			Stream:           true,
+		},
+	)
+	if err != nil {
+		return nil, errors.New("error creating chat complition: " + err.Error())
+	}
+
+	var fullResponse strings.Builder
+	for {
+		// Recv() recebendo os dados
+		response, err := resp.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, errors.New("error streaming response: " + err.Error())
+		}
+		// para isso é necessário estudar o package com o tipo de resposta que obtemos do chatComplitionStreamResponse da biblioteca
+		fullResponse.WriteString(response.Choices[0].Delta.Content)
+		r := ChatComplitionOutputDTO{
+			ChatID:  chat.ID,
+			UserID:  chat.UserID,
+			Content: fullResponse.String(),
+		}
+
+		us.Stream <- r
+	}
+
+	assistant, err := entities.NewMessage("assistant", fullResponse.String(), chat.Config.Model)
+	if err != nil {
+		return nil, errors.New("error creating assistant message: " + err.Error())
+	}
+	err = chat.AddMessage(assistant)
+	if err != nil {
+		return nil, errors.New("error adding new message: " + err.Error())
+	}
+
+	err = us.ChatGateway.SaveChat(ctx, chat)
+	if err != nil {
+		return nil, errors.New("error saving chat: " + err.Error())
+	}
+
+	return &ChatComplitionOutputDTO{
+		ChatID:  chat.ID,
+		UserID:  input.UserID,
+		Content: fullResponse.String(),
+	}, nil
 }
 
 func createNewChat(input ChatComplitionInputDTO) (*entities.Chat, error) {
