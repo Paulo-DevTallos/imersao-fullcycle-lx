@@ -74,7 +74,7 @@ func (us *ChatComplitionUseCase) Execute(ctx context.Context, input ChatCompliti
 
 func createNewChat(input ChatComplitionInputDTO) (*entities.Chat, error) {
 	model := entities.NewModel(input.Config.Model, input.Config.ModelMaxTokens)
-	chatConfig := entities.ChatConfig{
+	chatConfig := &entities.ChatConfig{
 		Temperature:      input.Config.Temperature,
 		TopP:             input.Config.TopP,
 		N:                input.Config.N,
@@ -85,11 +85,11 @@ func createNewChat(input ChatComplitionInputDTO) (*entities.Chat, error) {
 		Model:            model,
 	}
 
-	initialMessage, err := entities.newMessage("system", input.Config.InitialSystemMessage, model)
+	initialMessage, err := entities.NewMessage("system", input.Config.InitialSystemMessage, model)
 	if err != nil {
 		return nil, errors.New("error creating initial message" + err.Error())
 	}
-	chat, err := entities.NewChat(input.UserID, initialMessage, &chatConfig)
+	chat, err := entities.NewChat(input.UserID, initialMessage, chatConfig)
 	if err != nil {
 		return nil, errors.New("error creating new chat" + err.Error())
 	}

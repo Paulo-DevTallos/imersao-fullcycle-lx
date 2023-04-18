@@ -20,7 +20,7 @@ type Message struct {
 // o go permite mais de um retorno na função
 /* primeiro ele trata os parametros que são repassados, caso não seja
 cumprido nenhum ele retorna uma message vazia ou um erro*/
-func newMessage(role, content string, model *Model) (*Message, error) {
+func NewMessage(role, content string, model *Model) (*Message, error) {
 	totalTokens := tiktoken_go.CountTokens(model.GetModelName(), content)
 	msg := &Message{
 		ID:        uuid.New().String(),
